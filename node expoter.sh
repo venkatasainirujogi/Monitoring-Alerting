@@ -1,55 +1,39 @@
 #!/bin/bash
 
-# Node Exporter Installation Script for Ubuntu EC2
-
-# Author: Auto Script
-
-# Usage: chmod +x node_exporter.sh && ./node_exporter.sh
+# ============================================
+# Monitoring Target Setup Script
+# Installs:
+#   - Node Exporter
+#   - Prometheus Alertmanager
+# ============================================
 
 set -e
 
-echo "========================================="
-echo "Installing Node Exporter..."
-echo "========================================="
-
-# Update system
-
-echo "[1/8] Updating system packages..."
+echo "Updating system..."
 sudo apt update -y
 
-# Create node_exporter user
+# ============================================
+# Create users
+# ============================================
 
-echo "[2/8] Creating node_exporter user..."
-if id "node_exporter" &>/dev/null; then
-echo "User node_exporter already exists"
-else
-sudo useradd --no-create-home --shell /bin/false node_exporter
-fi
+echo "Creating users..."
+sudo useradd --no-create-home --shell /bin/false node_exporter || true
+sudo useradd --no-create-home --shell /bin/false alertmanager || true
 
-# Download node exporter
+# ============================================
+# Install Node Exporter
+# ============================================
 
-echo "[3/8] Downloading Node Exporter..."
+echo "Installing Node Exporter..."
 cd /tmp
 wget -q https://github.com/prometheus/node_exporter/releases/latest/download/node_exporter-1.8.2.linux-amd64.tar.gz
-
-# Extract files
-
-echo "[4/8] Extracting files..."
 tar -xzf node_exporter-1.8.2.linux-amd64.tar.gz
 
-# Move binary
-
-echo "[5/8] Moving binary to /usr/local/bin..."
 sudo mv node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/
-
-# Set ownership
-
 sudo chown node_exporter:node_exporter /usr/local/bin/node_exporter
 
-# Create systemd service
-
-echo "[6/8] Creating systemd service..."
-sudo bash -c 'cat > /etc/systemd/system/node_exporter.service <<EOF
+# Create Node Exporter service
+sudo tee /etc/systemd/system/node_exporter.service > /dev/null <<EOF
 [Unit]
 Description=Node Exporter
 After=network.target
@@ -57,42 +41,110 @@ After=network.target
 [Service]
 User=node_exporter
 Group=node_exporter
-Type=simple
 ExecStart=/usr/local/bin/node_exporter
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
-EOF'
+EOF
 
-# Reload systemd
+# ============================================
+# Install Alertmanager
+# ============================================
 
-echo "[7/8] Starting Node Exporter service..."
+echo "Installing Alertmanager..."
+cd /tmp
+wget -q https://github.com/prometheus/alertmanager/releases/latest/download/alertmanager-0.27.0.linux-amd64.tar.gz
+tar -xzf alertmanager-0.27.0.linux-amd64.tar.gz
+
+sudo mkdir -p /etc/alertmanager
+sudo mkdir -p /var/lib/alertmanager
+
+sudo mv alertmanager-0.27.0.linux-amd64/alertmanager /usr/local/bin/
+sudo mv alertmanager-0.27.0.linux-amd64/amtool /usr/local/bin/
+
+sudo chown alertmanager:alertmanager /usr/local/bin/alertmanager
+sudo chown alertmanager:alertmanager /usr/local/bin/amtool
+
+# Create default config
+sudo tee /etc/alertmanager/alertmanager.yml > /dev/null <<EOF
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "default"
+
+receivers:
+- name: "default"
+EOF
+
+sudo chown -R alertmanager:alertmanager /etc/alertmanager
+sudo chown -R alertmanager:alertmanager /var/lib/alertmanager
+
+# Create Alertmanager service
+sudo tee /etc/systemd/system/alertmanager.service > /dev/null <<EOF
+[Unit]
+Description=Alertmanager
+After=network.target
+
+[Service]
+User=alertmanager
+Group=alertmanager
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --storage.path=/var/lib/alertmanager
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# ============================================
+# Start services
+# ============================================
+
+echo "Starting services..."
+
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
+
 sudo systemctl enable node_exporter
 sudo systemctl start node_exporter
 
-# Cleanup
+sudo systemctl enable alertmanager
+sudo systemctl start alertmanager
 
-echo "[8/8] Cleaning temporary files..."
-rm -rf /tmp/node_exporter-1.8.2.linux-amd64*
-
-# Check status
+# ============================================
+# Status
+# ============================================
 
 echo ""
-echo "========================================="
-echo "Node Exporter installation completed!"
-echo "========================================="
+echo "=================================="
+echo "Installation completed!"
+echo "=================================="
 
+echo "Node Exporter status:"
 sudo systemctl status node_exporter --no-pager
 
 echo ""
-echo "Metrics URL:"
-echo "http://$(hostname -I | awk '{print $1}'):9100/metrics"
+echo "Alertmanager status:"
+sudo systemctl status alertmanager --no-pager
+
 echo ""
-echo "IMPORTANT: Make sure port 9100 is open in EC2 Security Group"
-echo "========================================="
+echo "Access URLs:"
+echo "Node Exporter:"
+echo "http://$(hostname -I | awk '{print $1}'):9100/metrics"
+
+echo ""
+echo "Alertmanager:"
+echo "http://$(hostname -I | awk '{print $1}'):9093"
+
+echo ""
+echo "IMPORTANT:"
+echo "Open ports in EC2 Security Group:"
+echo "9100 - Node Exporter"
+echo "9093 - Alertmanager"
+
 # ================================
 # HOW TO USE THIS SCRIPT
 # ================================
